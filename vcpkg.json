@@ -1,0 +1,11 @@
+{
+    "name": "dense",
+    "version-string": "0.1.0",
+    "dependencies": [
+      "sqlite3",
+      "nlohmann-json",
+      "cli11",
+      "xxhash"
+    ]
+}
+  
