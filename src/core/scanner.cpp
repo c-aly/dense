@@ -1,248 +1,150 @@
 #include "core/scanner.hpp"
-#include "config.hpp"
-#include "core/hash.hpp"
-#include "storage/database.hpp"
-#include "storage/statement.hpp"
 
 #include <algorithm>
-#include <chrono>
-#include <filesystem>
-#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <unordered_set>
-#include <vector>
-
 
 namespace fs = std::filesystem;
 
 namespace {
-    // info on single file
-    struct FileInfo {
-        fs::path    abs;
-        std::string rel;      // forward slashes; "" for a single-file source
-        std::string format;
-        int64_t     size;
-        int64_t     mtime_ns;
+
+// ── format detection ──────────────────────────────────────────────────────────
+
+// Returns the lowercase extension (without dot) if the file is a supported text
+// or document type. Returns "" to indicate the file should be skipped.
+std::string format_for(const fs::path& p) {
+    std::string ext = p.extension().string();
+    if (ext.size() < 2 || ext[0] != '.') return "";    // no extension
+    ext = ext.substr(1);
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    if (ext == "markdown") return "md";   // normalise
+
+    // supported: markup, code, config, documents
+    // anything else (images, binaries, archives) is skipped
+    static const std::unordered_set<std::string> supported = {
+        // markup / text
+        "md", "txt", "rst", "html", "htm", "xml", "csv",
+        // code
+        "py", "js", "ts", "jsx", "tsx", "go",
+        "cpp", "cc", "cxx", "c", "h", "hpp", "hxx",
+        "java", "rb", "rs", "swift", "kt", "cs", "php",
+        "r", "scala", "lua", "pl", "sh", "bash", "zsh",
+        "sql", "css", "scss", "sass", "vue", "svelte",
+        // config / data
+        "json", "yaml", "yml", "toml", "ini",
+        // documents
+        "pdf", "docx", "pptx", "xlsx", "odt", "epub", "rtf",
     };
+    return supported.count(ext) ? ext : "";
+}
 
+// ── pattern matching ──────────────────────────────────────────────────────────
 
-    // fetch format of file
-    std::string format_for(const fs::path& p) {
-        std::string ext = p.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(),
-                    [](unsigned char c) { return std::tolower(c); });
-
-        if (ext == ".md" || ext == ".markdown") return "md";
-        if (ext == ".txt") return "txt";
-        if (ext == ".rst") return "rst";
-        return "";      // Returns "" for unsupported types.
-    }
-
-
-    // time since file last modified
-    int64_t mtime_ns(const fs::path& p) {
-        auto f_time = fs::last_write_time(p);
-        auto sys_time = decltype(f_time)::clock::to_sys(f_time); // sys clock built-in converter
-    
-        auto t = sys_time.time_since_epoch();
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(t).count();
-    }
-
-
-    // wrap into FileInfo struct
-    FileInfo make_info(const fs::path& abs, std::string rel, std::string format) {
-        return {abs, std::move(rel), std::move(format),
-            static_cast<int64_t>(fs::file_size(abs)), mtime_ns(abs)};
-    }
-
-
-    // walk source dir, return supported files; counts everything else as skipped.
-    // ignore_dirs: directory names (not paths) to skip entirely.
-    std::vector<FileInfo> collect_files(const fs::path& root, const std::string& kind,
-                                        const std::unordered_set<std::string>& ignore_dirs,
-                                        ScanStats& stats) {
-        std::vector<FileInfo> files;
-
-        // make sure root exists and is the right type
-        std::error_code ecr;
-        bool ok = (kind == "dir") ? fs::is_directory(root, ecr) : fs::is_regular_file(root, ecr);
-        if (ecr || !ok) throw std::runtime_error("source path missing or wrong type: " + root.string());
-
-        // single-file source
-        if (kind == "file") {
-            std::string fmt = format_for(root);
-            if (fmt.empty()) ++stats.skipped;
-            else files.push_back(make_info(root, "", fmt));
-            return files;
+// Returns true if the entry (file or directory) matches any ignore pattern.
+// Patterns are matched against the entry's filename only (not its full path).
+//   "build"   → exact name match (works for dirs and files)
+//   "*.log"   → extension match for files
+bool matches_ignore(const fs::path& p, bool is_dir,
+                    const std::vector<std::string>& patterns)
+{
+    const std::string name = p.filename().string();
+    for (const auto& pat : patterns) {
+        if (pat.size() > 2 && pat[0] == '*' && pat[1] == '.') {
+            // extension glob: *.ext
+            if (!is_dir && p.extension() == pat.substr(1)) return true;
+        } else {
+            if (name == pat) return true;
         }
+    }
+    return false;
+}
 
-        // directory source: recurse without following symlinks (default iterator behaviour)
+} // namespace
+
+
+// ── public ────────────────────────────────────────────────────────────────────
+
+std::string ScanStats::to_string() const {
+    return std::to_string(total)   + " file(s) found, " +
+           std::to_string(skipped) + " skipped, " +
+           std::to_string(failed)  + " error(s)";
+}
+
+ScanResult scan_directory(const fs::path& root,
+                          const std::vector<std::string>& patterns_in)
+{
+    ScanResult result;
+
+    // always skip .dense/ itself — prepend so it can't be overridden
+    std::vector<std::string> patterns = {".dense"};
+    patterns.insert(patterns.end(), patterns_in.begin(), patterns_in.end());
+
+    // iterative DFS — more control than recursive_directory_iterator when
+    // we need fine-grained per-entry error handling
+    std::vector<fs::path> work = {root};
+
+    while (!work.empty()) {
+        fs::path dir = work.back();
+        work.pop_back();
+
+        // construct iterator; skip the entire directory on error (e.g. perm denied)
         std::error_code ec;
-        fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
-        if (ec) throw std::runtime_error("cannot read " + root.string() + ": " + ec.message());
+        fs::recursive_directory_iterator it(
+            dir,
+            fs::directory_options::skip_permission_denied,
+            ec);
+        if (ec) { ++result.stats.failed; continue; }
 
         for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
-            if (ec) break;
+            if (ec) { ++result.stats.failed; break; }
 
             const auto& entry = *it;
             std::error_code e2;
 
-            // skip all symlinks (file or dir) — avoids loops and out-of-tree indexing
-            if (entry.is_symlink(e2)) { it.disable_recursion_pending(); continue; }
-
-            // directories: check ignore list; disable_recursion_pending prunes the subtree
-            if (entry.is_directory(e2)) {
-                if (ignore_dirs.count(entry.path().filename().string()))
-                    it.disable_recursion_pending();
+            // symlinks: skip entirely — avoids loops and out-of-tree traversal
+            if (entry.is_symlink(e2) || e2) {
+                it.disable_recursion_pending();
                 continue;
             }
 
-            if (!entry.is_regular_file(e2)) continue;
+            const bool is_dir  = entry.is_directory(e2);
+            if (e2) { ++result.stats.failed; it.disable_recursion_pending(); continue; }
 
-            std::string fmt = format_for(entry.path());
-            if (fmt.empty()) { ++stats.skipped; continue; }
+            const bool is_file = !is_dir && entry.is_regular_file(e2);
+            if (e2) { ++result.stats.failed; continue; }
 
-            try {
-                files.push_back(make_info(entry.path(),
-                    fs::relative(entry.path(), root).generic_string(), fmt));
-            } catch (const fs::filesystem_error&) {
-                ++stats.skipped;
+            // check ignore patterns for both dirs and files
+            if (matches_ignore(entry.path(), is_dir, patterns)) {
+                if (is_dir)  it.disable_recursion_pending();   // prune subtree
+                else         ++result.stats.skipped;
+                continue;
             }
+
+            if (!is_file) continue;
+
+            // format check — skip binary/unsupported types
+            std::string fmt = format_for(entry.path());
+            if (fmt.empty()) { ++result.stats.skipped; continue; }
+
+            fs::path rel = fs::relative(entry.path(), root, e2);
+            if (e2) { ++result.stats.failed; continue; }
+
+            uintmax_t sz = entry.file_size(e2);
+            if (e2) sz = 0;
+
+            result.files.push_back({
+                .abs_path = entry.path(),
+                .rel_path = std::move(rel),
+                .format   = std::move(fmt),
+                .size     = sz,
+            });
+            ++result.stats.total;
         }
-
-        return files;
+        if (ec) ++result.stats.failed;
     }
-}   // namespace end
 
-
-// human readable ScanStats formatter
-std::string ScanStats::to_string() const {
-    return "added " + std::to_string(added) + ", changed " + std::to_string(changed) +
-           ", removed " + std::to_string(removed) + " (" + std::to_string(unchanged) +
-           " unchanged, " + std::to_string(skipped) + " skipped)";
+    return result;
 }
-
-// scan source into db, return stats
-ScanStats scan_source(Database& db, int64_t source_id) {
-    ScanStats stats;
-    sqlite3* h = db.handle();
-
-    // load source
-    fs::path root;
-    std::string kind;
-    {
-        Statement q(h, "SELECT path, kind FROM sources WHERE id = ?");
-        q.bind_int(1, source_id);
-        if (!q.step()) throw std::runtime_error("source not found");
-        root = q.col_text(0);
-        kind = q.col_text(1);
-    }
-
-    // load ignore list once per scan (reads dense.cfg on demand)
-    const auto ignore_vec = Config::load_ignore_dirs();
-    const std::unordered_set<std::string> ignore_dirs(ignore_vec.begin(), ignore_vec.end());
-
-    std::vector<FileInfo> files = collect_files(root, kind, ignore_dirs, stats);
-
-    // protect against silently destroying everything on collect_files failure
-    if (files.empty()) {
-        Statement cnt(h, "SELECT count(*) FROM documents WHERE source_id = ?");
-        cnt.bind_int(1, source_id);
-        cnt.step();
-        if (cnt.col_int(0) > 0)
-            throw std::runtime_error("refusing to remove all documents from " + root.string() +
-                                     " (found no files); run `dense remove` if intended");
-    }
-
-    // prepared statements
-    Statement sel(h, "SELECT id, size, mtime_ns, content_hash FROM documents "
-        "WHERE source_id = ? AND rel_path = ?");
-    Statement ins(h, "INSERT INTO documents(source_id, rel_path, size, mtime_ns, content_hash, "
-        "format, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')");
-    Statement touch(h, "UPDATE documents SET size = ?, mtime_ns = ? WHERE id = ?");
-    Statement upd(h, "UPDATE documents SET size = ?, mtime_ns = ?, content_hash = ?, format = ?, "
-        "status = 'pending', summary = NULL, summary_model = NULL, "
-        "indexed_at = NULL, error = NULL WHERE id = ?");
-    Statement del_chunks(h, "DELETE FROM chunks WHERE document_id = ?");
-
-    Transaction tx(db);     // wrap in atomic transaction (grab lock)
-    std::unordered_set<std::string> seen;
-
-    for (const FileInfo& f : files) {
-        seen.insert(f.rel);     // track seen files
-     
-        bool found = false;
-        int64_t doc_id = 0, old_size = 0, old_mtime = 0;
-        std::string old_hash;
-
-        // select all docs with matching source and relative path
-        sel.bind_int(1, source_id).bind_text(2, f.rel);
-        if (sel.step()) {
-            found = true;
-            doc_id = sel.col_int(0);
-            old_size = sel.col_int(1);
-            old_mtime = sel.col_int(2);
-            old_hash = sel.col_text(3);
-        }
-        sel.reset();
-
-        // if file unchanged, don't waste time hashing
-        if (found && old_size == f.size && old_mtime == f.mtime_ns) {
-            ++stats.unchanged;  
-            continue;
-        }
-
-        // changed file
-        std::string new_hash;
-        try {
-            new_hash = hash_file(f.abs);
-        } catch (const std::exception&) {
-            ++stats.skipped;             // unreadable; still in `seen`, so not treated as deleted
-            continue;
-        }
-
-        // not found in db == new file
-        if (!found) { 
-            ins.bind_int(1, source_id).bind_text(2, f.rel).bind_int(3, f.size)
-                .bind_int(4, f.mtime_ns).bind_text(5, new_hash).bind_text(6, f.format);
-            ins.run();
-            ++stats.added;
-
-        // same hash means file 
-        } else if (new_hash == old_hash) {
-            touch.bind_int(1, f.size).bind_int(2, f.mtime_ns).bind_int(3, doc_id);
-            touch.run();                 // touched but content identical
-            ++stats.unchanged;
-
-        // clean up stale doc info
-        } else {
-            del_chunks.bind_int(1, doc_id);
-            del_chunks.run();            // fires the FTS delete trigger
-            upd.bind_int(1, f.size).bind_int(2, f.mtime_ns).bind_text(3, new_hash)
-               .bind_text(4, f.format).bind_int(5, doc_id);
-            upd.run();  // clear stale stats, set to pending!
-            ++stats.changed;
-        }
-    }
-
-    // anything in DB but not on disk is deleted
-    std::vector<int64_t> gone;      // collect deleted files under this source
-    {
-        Statement all(h, "SELECT id, rel_path FROM documents WHERE source_id = ?");
-        all.bind_int(1, source_id);
-        while (all.step())
-            if (!seen.count(all.col_text(1))) gone.push_back(all.col_int(0));
-    }
-    
-    Statement del_doc(h, "DELETE FROM documents WHERE id = ?");
-    for (int64_t id : gone) {
-        del_doc.bind_int(1, id);
-        del_doc.run();                   // cascades to chunks and FTS (need CASCADE!)
-        ++stats.removed;
-    }
-
-    tx.commit();
-    return stats;
-}
-

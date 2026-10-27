@@ -66,4 +66,8 @@ CMakeUserPresets.json
 docs/*
 misc/*
 tmp/*
+dist/*
 .DS_STORE
+
+.tar
+.tar.gz
