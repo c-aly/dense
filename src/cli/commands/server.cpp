@@ -25,7 +25,8 @@ void handle_server_create(const std::string& name) {
         auto s = client.create_server(name);
         std::cout << "Created server '" << s.name << "' (id: " << s.server_id << ").\n"
                   << "Link a directory to it with `dense connect " << s.name << "`.\n"
-                  << "Give an agent access with `dense server key create " << s.name << "`.\n";
+                  << "Give an agent access with `dense server key create " << s.name << "`,\n"
+                  << "or connect Claude / ChatGPT with `dense server url " << s.name << "`.\n";
     } catch (const std::exception& e) {
         report_error("server create", e);
     }
@@ -60,6 +61,26 @@ void handle_server_list() {
                       << s.server_id << "\n";
     } catch (const std::exception& e) {
         report_error("server list", e);
+    }
+}
+
+void handle_server_url(const std::string& ref) {
+    auto global = require_login();
+    if (!global) return;
+
+    try {
+        Http::DenseClient client(global->user_token);
+        auto server = resolve_server(client, ref, "server url");
+        if (!server) return;
+
+        std::cout << Http::mcp_url(server->server_id) << "\n\n"
+                  << "Add this as a custom connector in Claude or ChatGPT (Settings > Connectors).\n"
+                  << "You'll sign in with Google, using the email on your dense account, and the\n"
+                  << "agent can then read '" << server->name << "' and nothing else.\n"
+                  << "For Cursor, Claude Code and other tools that take a key: `dense server key create "
+                  << server->name << "`.\n";
+    } catch (const std::exception& e) {
+        report_error("server url", e);
     }
 }
 

@@ -10,6 +10,10 @@ namespace Http {
 // Override in dev: DENSE_URL=http://localhost:8000
 const char* dense_url();
 
+// The MCP endpoint for agents: `<url>/mcp`, or `<url>/mcp/<server_id>` for one server's own
+// URL (what browser agents such as Claude and ChatGPT connect to; they sign in with OAuth).
+std::string mcp_url(const std::string& server_id = {});
+
 struct AuthResult    { std::string user_id, email, token; };            // signup / login
 struct ServerInfo    { std::string server_id, name, owner_id, owner_email, role; };  // role: owner|member
 struct MemberInfo    { std::string user_id, email, role; };             // role: owner|member
@@ -31,9 +35,14 @@ public:
     explicit DenseClient(std::string session_token = {});
 
     // ── auth ────────────────────────────────────────────────────────────────
-    // signup throws ApiError(409) if the email is already registered.
-    // login   throws ApiError(401) on bad credentials.
-    AuthResult signup(const std::string& email, const std::string& password);
+    // Signup is two calls: the server emails a code, then the code + new password create the account.
+    // request_signup_code throws ApiError(409) if the email is registered, 429 if a code was
+    //                     just sent, 503 if the server can't send email.
+    // signup              throws ApiError(400) for a wrong code (retry), 410 if the code expired
+    //                     or was used up (request a new one), 409 if the email is registered.
+    // login               throws ApiError(401) on bad credentials.
+    void       request_signup_code(const std::string& email);
+    AuthResult signup(const std::string& email, const std::string& code, const std::string& password);
     AuthResult login (const std::string& email, const std::string& password);
 
     // ── servers ─────────────────────────────────────────────────────────────

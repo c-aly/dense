@@ -15,17 +15,10 @@ using detail::resolve_server;
 
 namespace {
 
-// The single URL agents connect to; the key (not the URL) identifies the server.
-std::string mcp_url() {
-    std::string base = Http::dense_url();
-    while (!base.empty() && base.back() == '/') base.pop_back();
-    return base + "/mcp";
-}
-
 // The key is a credential for an MCP *client* (Claude Code, Cursor, ...). We can't
 // write their config for them yet, so show exactly what to paste where.
 void print_setup(const std::string& server_name, const std::string& key) {
-    const std::string url  = mcp_url();
+    const std::string url  = Http::mcp_url();   // with a key, the key (not the URL) names the server
     const std::string name = "dense-" + server_name;
 
     std::cout << "Add it to your agent:\n\n"

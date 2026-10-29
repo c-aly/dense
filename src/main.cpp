@@ -31,6 +31,10 @@ int main(int argc, char** argv) {
 
     auto* server_list = server_cmd->add_subcommand("list", "List servers you own or belong to");
 
+    std::string server_url_ref;
+    auto* server_url = server_cmd->add_subcommand("url", "Show the URL to connect Claude or ChatGPT to a server");
+    server_url->add_option("server", server_url_ref, "Server name (or id if two share a name)")->required();
+
     std::string server_remove_ref;
     bool server_remove_yes = false;
     auto* server_remove = server_cmd->add_subcommand("remove", "Delete a server you own");
@@ -98,6 +102,7 @@ int main(int argc, char** argv) {
     else if (login_cmd->parsed())      dense::cli::handle_login(login_email);
     else if (server_create->parsed())  dense::cli::handle_server_create(server_create_name);
     else if (server_list->parsed())    dense::cli::handle_server_list();
+    else if (server_url->parsed())     dense::cli::handle_server_url(server_url_ref);
     else if (server_remove->parsed())  dense::cli::handle_server_remove(server_remove_ref, server_remove_yes);
     else if (server_share->parsed())   dense::cli::handle_server_share(share_ref, share_email);
     else if (server_unshare->parsed()) dense::cli::handle_server_unshare(unshare_ref, unshare_email);

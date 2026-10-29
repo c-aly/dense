@@ -10,7 +10,13 @@ namespace Http {
 
 const char* dense_url() {
     if (const char* env = std::getenv("DENSE_URL")) return env;
-    return "https://api.dense.io";
+    return "https://api.densehq.com";
+}
+
+std::string mcp_url(const std::string& server_id) {
+    std::string base = dense_url();
+    while (!base.empty() && base.back() == '/') base.pop_back();
+    return base + "/mcp" + (server_id.empty() ? "" : "/" + server_id);
 }
 
 // ── internal helpers ──────────────────────────────────────────────────────────
@@ -84,9 +90,17 @@ DenseClient::DenseClient(std::string session_token)
 
 // ── auth ──────────────────────────────────────────────────────────────────────
 
-AuthResult DenseClient::signup(const std::string& email, const std::string& password) {
+void DenseClient::request_signup_code(const std::string& email) {
     auto cli = make_client(token_);
-    json body = {{"email", email}, {"password", password}};
+    json body = {{"email", email}};
+    auto res = cli.Post("/api/v1/auth/signup/code", body.dump(), "application/json");
+    check(res, "signup");
+}
+
+AuthResult DenseClient::signup(const std::string& email, const std::string& code,
+                               const std::string& password) {
+    auto cli = make_client(token_);
+    json body = {{"email", email}, {"code", code}, {"password", password}};
     auto res = cli.Post("/api/v1/auth/signup", body.dump(), "application/json");
     check(res, "signup");
     return parse_auth(res->body);

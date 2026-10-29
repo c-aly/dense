@@ -63,7 +63,7 @@ CMakeUserPresets.json
 
 # other
 .cache
-docs/*
+dev_docs/*
 misc/*
 tmp/*
 dist/*
