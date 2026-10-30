@@ -22,10 +22,6 @@ jobs:
             artifact: dense-macos-arm64
             triplet: arm64-osx
             archive: tar.gz
-          - os: macos-13
-            artifact: dense-macos-amd64
-            triplet: x64-osx
-            archive: tar.gz
           - os: ubuntu-24.04
             artifact: dense-linux-amd64
             triplet: x64-linux
