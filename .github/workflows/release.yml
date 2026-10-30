@@ -1,0 +1,161 @@
+# Build release binaries on tag (v*) and attach them to a GitHub Release.
+# Manual "Run workflow" builds artifacts only (no release) — useful to test CI.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            artifact: dense-macos-arm64
+            triplet: arm64-osx
+            archive: tar.gz
+          - os: macos-13
+            artifact: dense-macos-amd64
+            triplet: x64-osx
+            archive: tar.gz
+          - os: ubuntu-24.04
+            artifact: dense-linux-amd64
+            triplet: x64-linux
+            archive: tar.gz
+          - os: windows-latest
+            artifact: dense-windows-amd64
+            triplet: x64-windows-static
+            archive: zip
+            exe: .exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Setup MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ninja -y
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Bootstrap vcpkg
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$GITHUB_WORKSPACE/vcpkg"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          else
+            "$GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+          echo "VCPKG_ROOT=$GITHUB_WORKSPACE/vcpkg" >> "$GITHUB_ENV"
+
+      - name: Configure
+        shell: bash
+        run: |
+          EXTRA=()
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # Match x64-windows-static: static CRT + static OpenSSL (no DLLs to ship).
+            EXTRA+=(
+              -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+              -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+            )
+          else
+            EXTRA+=(-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }})
+          fi
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            "${EXTRA[@]}"
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          BIN=build/dense
+          chmod +x "$BIN"
+          # Fail if OpenSSL somehow linked dynamically (vcpkg static triplets should bake it in).
+          if command -v otool >/dev/null; then
+            if otool -L "$BIN" | grep -Ei 'libssl|libcrypto'; then
+              echo "OpenSSL appears dynamically linked:" >&2
+              otool -L "$BIN" >&2
+              exit 1
+            fi
+          elif command -v ldd >/dev/null; then
+            if ldd "$BIN" | grep -Ei 'libssl|libcrypto'; then
+              echo "OpenSSL appears dynamically linked:" >&2
+              ldd "$BIN" >&2
+              exit 1
+            fi
+          fi
+          STAGE="${{ matrix.artifact }}"
+          mkdir -p "$STAGE"
+          cp "$BIN" "$STAGE/dense"
+          tar -czf "${{ matrix.artifact }}.tar.gz" "$STAGE"
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $bin = "build/dense${{ matrix.exe }}"
+          $stage = "${{ matrix.artifact }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item $bin "$stage/dense${{ matrix.exe }}"
+          Compress-Archive -Path $stage -DestinationPath "${{ matrix.artifact }}.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          ls -la
+          sha256sum dense-*.tar.gz dense-*.zip > checksums.txt
+          cat checksums.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/dense-*.tar.gz
+            dist/dense-*.zip
+            dist/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
