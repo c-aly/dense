@@ -38,14 +38,14 @@ void print_setup(const std::string& server_name, const std::string& key) {
 
 } // namespace
 
-void handle_server_key_create(const std::string& ref, const std::string& label) {
+int handle_server_key_create(const std::string& ref, const std::string& label) {
     auto global = require_login();
-    if (!global) return;
+    if (!global) return 1;
 
     try {
         Http::DenseClient client(global->user_token);
         auto server = resolve_server(client, ref, "server key create");
-        if (!server) return;
+        if (!server) return 1;
 
         auto k = client.create_server_key(server->server_id, label);
         std::cout << "Created a key for '" << server->name << "'. Copy it now; it can't be shown again.\n\n"
@@ -53,25 +53,27 @@ void handle_server_key_create(const std::string& ref, const std::string& label) 
         print_setup(server->name, k.key);
         std::cout << "Anyone holding this key can read everything in '" << server->name << "'.\n"
                   << "Revoke it with `dense server key revoke " << server->name << " " << k.key_id << "`.\n";
+        return 0;
     } catch (const std::exception& e) {
         report_error("server key create", e);
+        return 1;
     }
 }
 
-void handle_server_key_list(const std::string& ref) {
+int handle_server_key_list(const std::string& ref) {
     auto global = require_login();
-    if (!global) return;
+    if (!global) return 1;
 
     try {
         Http::DenseClient client(global->user_token);
         auto server = resolve_server(client, ref, "server key list");
-        if (!server) return;
+        if (!server) return 1;
 
         auto keys = client.list_server_keys(server->server_id);
         if (keys.empty()) {
             std::cout << "No keys for '" << server->name << "'. Create one with `dense server key create "
                       << server->name << "`.\n";
-            return;
+            return 0;
         }
 
         size_t label_w = 5, by_w = 10;
@@ -92,19 +94,21 @@ void handle_server_key_list(const std::string& ref) {
                       << std::setw(static_cast<int>(by_w + 2))            << k.created_by_email
                       << std::setw(12)                                    << k.created_at.substr(0, 10)
                       << k.key_id << "\n";
+        return 0;
     } catch (const std::exception& e) {
         report_error("server key list", e);
+        return 1;
     }
 }
 
-void handle_server_key_revoke(const std::string& ref, const std::string& key_ref) {
+int handle_server_key_revoke(const std::string& ref, const std::string& key_ref) {
     auto global = require_login();
-    if (!global) return;
+    if (!global) return 1;
 
     try {
         Http::DenseClient client(global->user_token);
         auto server = resolve_server(client, ref, "server key revoke");
-        if (!server) return;
+        if (!server) return 1;
 
         // accept the full id, or any prefix of it that's unambiguous
         std::vector<Http::ServerKeyInfo> matches;
@@ -114,18 +118,20 @@ void handle_server_key_revoke(const std::string& ref, const std::string& key_ref
         if (matches.empty()) {
             std::cerr << "dense server key revoke: no key '" << key_ref << "' on '" << server->name
                       << "' (see `dense server key list " << server->name << "`).\n";
-            return;
+            return 1;
         }
         if (matches.size() > 1) {
             std::cerr << "dense server key revoke: '" << key_ref << "' matches " << matches.size()
                       << " keys; use more of the id.\n";
-            return;
+            return 1;
         }
         client.revoke_server_key(server->server_id, matches[0].key_id);
         std::cout << "Revoked key " << matches[0].hint << "... on '" << server->name
                   << "'. Agents using it lose access immediately.\n";
+        return 0;
     } catch (const std::exception& e) {
         report_error("server key revoke", e);
+        return 1;
     }
 }
 

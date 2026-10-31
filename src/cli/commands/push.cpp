@@ -25,21 +25,21 @@ namespace dense::cli {
 using detail::report_error;
 using detail::require_login;
 
-void handle_push() {
+int handle_push() {
     const auto cwd = std::filesystem::current_path();
 
     auto local = Local::load(cwd);
     if (!local) {
         std::cerr << "dense push: not a dense directory — run `dense init` first.\n";
-        return;
+        return 1;
     }
     if (!local->connected()) {
         std::cerr << "dense push: source not connected — run `dense connect` first.\n";
-        return;
+        return 1;
     }
 
     auto global = require_login();
-    if (!global) return;
+    if (!global) return 1;
 
     // merge global + local ignore patterns
     auto ignore = global->ignore;
@@ -50,7 +50,7 @@ void handle_push() {
     ScanResult scan = scan_directory(cwd, ignore);
     std::cout << scan.stats.to_string() << "\n\n";
 
-    if (scan.files.empty()) { std::cout << "Nothing to push.\n"; return; }
+    if (scan.files.empty()) { std::cout << "Nothing to push.\n"; return 0; }
 
     Http::DenseClient client(global->user_token);
     int uploaded = 0, skipped = 0, failed = 0;
@@ -86,6 +86,20 @@ void handle_push() {
     }
     std::cout << "\nDone. " << uploaded << " uploaded, "
               << skipped << " skipped, " << failed << " failed.\n";
+
+    if (uploaded > 0) {
+        if (local->servers.size() == 1) {
+            std::cout << "Next: `dense server key create " << local->servers[0] << "`\n";
+        } else if (local->servers.size() > 1) {
+            std::cout << "This folder feeds ";
+            for (size_t i = 0; i < local->servers.size(); ++i)
+                std::cout << (i ? ", " : "") << local->servers[i];
+            std::cout << ".\nNext: `dense server key create <server>`\n";
+        } else {
+            std::cout << "Next: `dense server key create <server>`\n";
+        }
+    }
+    return failed > 0 ? 1 : 0;
 }
 
 } // namespace dense::cli

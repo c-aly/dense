@@ -1,0 +1,1 @@
+This folder *dense-docs-mcp* is actually itself a Dense project! You can add the url `mcp.densehq.com` to your agent to give it access to Dense documentation.

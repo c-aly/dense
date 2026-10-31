@@ -41,9 +41,9 @@ namespace dense::cli {
 using detail::ask_email;
 using detail::save_session;
 
-void handle_signup(const std::string& email_flag) {
+int handle_signup(const std::string& email_flag) {
     const std::string email = ask_email(email_flag);
-    if (email.empty()) { std::cerr << "dense signup: email is required.\n"; return; }
+    if (email.empty()) { std::cerr << "dense signup: email is required.\n"; return 1; }
 
     try {
         Http::DenseClient client;
@@ -54,10 +54,10 @@ void handle_signup(const std::string& email_flag) {
 
         // 2. the code, then the password. A wrong code only re-asks for the code.
         std::string code = trim(prompt("Code: "));
-        if (code.empty()) { std::cerr << "dense signup: no code entered.\n"; return; }
+        if (code.empty()) { std::cerr << "dense signup: no code entered.\n"; return 1; }
 
         const std::string pw = ask_new_password();
-        if (pw.empty()) return;
+        if (pw.empty()) return 1;
 
         for (int attempt = 1;; ++attempt) {
             try {
@@ -65,16 +65,16 @@ void handle_signup(const std::string& email_flag) {
                 save_session(auth);
                 std::cout << "Signed up and logged in as " << auth.email << ".\n"
                           << "Next: `dense server create <name>`.\n";
-                return;
+                return 0;
             } catch (const Http::ApiError& e) {
                 if (e.status_code != 400) throw;              // 410 expired, 409 taken, … → outer handler
                 std::cerr << "dense signup: " << e.what() << "\n";
                 if (attempt >= kMaxCodeTries) {
                     std::cerr << "  Run `dense signup` again for a new code.\n";
-                    return;
+                    return 1;
                 }
                 code = trim(prompt("Code: "));
-                if (code.empty()) { std::cerr << "dense signup: no code entered.\n"; return; }
+                if (code.empty()) { std::cerr << "dense signup: no code entered.\n"; return 1; }
             }
         }
     } catch (const Http::ApiError& e) {
@@ -83,8 +83,10 @@ void handle_signup(const std::string& email_flag) {
             std::cerr << "  (already have an account? run `dense login`)\n";
         else if (e.status_code == 410)
             std::cerr << "  Run `dense signup` again for a new code.\n";
+        return 1;
     } catch (const std::exception& e) {
         std::cerr << "dense signup: " << e.what() << "\n";
+        return 1;
     }
 }
 

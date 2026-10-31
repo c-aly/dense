@@ -19,7 +19,8 @@ struct ServerInfo    { std::string server_id, name, owner_id, owner_email, role;
 struct MemberInfo    { std::string user_id, email, role; };             // role: owner|member
 struct NewServerKey  { std::string key_id, key, hint, label; };       // `key` is shown once
 struct ServerKeyInfo { std::string key_id, hint, label, created_by_email, created_at; bool mine = false; };
-struct ConnectResult { std::string server_id, source_id; };
+struct ConnectResult { std::string server_id, source_id; bool already_linked = false; };
+struct SourceInfo    { std::string source_id, name, type, owner_id, owner_email; };
 struct UploadResult  { std::string file_id, status; bool skipped = false; };
 
 // Non-2xx response. what() is "HTTP <code> — <server's detail message>".
@@ -49,6 +50,8 @@ public:
     ServerInfo              create_server(const std::string& name);   // 409 if you own that name
     std::vector<ServerInfo> list_servers();                           // owned + shared with you
     void                    delete_server(const std::string& server_id);   // owner only
+    // Owner only. visibility is "public" or "private". Servers are created private.
+    void                    set_server_visibility(const std::string& server_id, const std::string& visibility);
 
     // ── members ─────────────────────────────────────────────────────────────
     MemberInfo              share_server (const std::string& server_id, const std::string& email);
@@ -62,11 +65,18 @@ public:
     void                      revoke_server_key(const std::string& server_id, const std::string& key_id);
 
     // ── sources ─────────────────────────────────────────────────────────────
-    // Register this machine's source and link it to a server you can access.
-    // Idempotent. Throws ApiError(404) if the server isn't visible to you.
+    // Link this folder's source to a server you can access. source_id empty means
+    // create a new source (the returned id is the folder's identity from then on).
+    // Throws ApiError(404) if the server isn't visible, or if source_id isn't yours.
     ConnectResult connect(const std::string& server_id,
                           const std::string& source_name,
-                          const std::string& device);
+                          const std::string& source_id = {});
+
+    // Folders currently feeding a server, and removing one of those links.
+    // Unlink keeps the folder's files; other servers it still feeds are untouched.
+    // Either the folder's owner or the server's owner may unlink.
+    std::vector<SourceInfo> list_sources(const std::string& server_id);
+    void                    unlink_source(const std::string& server_id, const std::string& source_id);
 
     // ── ingest ──────────────────────────────────────────────────────────────
     // Only the source's owner may upload. Caller provides pre-read bytes and

@@ -1,0 +1,49 @@
+# dense ignore patterns
+# Directory names or file extensions (*.ext) to skip during push.
+# Lines starting with '#' are comments.
+
+# version control
+.git
+.hg
+.svn
+
+# build output
+build
+dist
+out
+target
+_build
+
+# dependencies
+node_modules
+vendor
+vcpkg
+vcpkg_installed
+
+# python
+venv
+.venv
+__pycache__
+.tox
+.mypy_cache
+*.pyc
+
+# env / secrets
+.env
+.env.*
+
+# editor / OS
+.DS_Store
+.idea
+.vscode
+*.swp
+
+# caches
+.cache
+.next
+.nuxt
+.svelte-kit
+coverage
+
+# other
+DEMO.md

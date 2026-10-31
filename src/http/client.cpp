@@ -73,6 +73,14 @@ static std::string opt_string(const json& d, const char* key) {
     return d.contains(key) && d[key].is_string() ? d[key].get<std::string>() : std::string();
 }
 
+static SourceInfo parse_source(const json& d) {
+    return {d.at("source_id").get<std::string>(),
+            d.at("name").get<std::string>(),
+            d.at("type").get<std::string>(),
+            d.at("owner_id").get<std::string>(),
+            d.at("owner_email").get<std::string>()};
+}
+
 static ServerKeyInfo parse_server_key(const json& d) {
     return {d.at("key_id").get<std::string>(),
             d.at("hint").get<std::string>(),
@@ -140,6 +148,13 @@ void DenseClient::delete_server(const std::string& server_id) {
     check(res, "delete_server");
 }
 
+void DenseClient::set_server_visibility(const std::string& server_id, const std::string& visibility) {
+    auto cli = make_client(token_);
+    json body = {{"visibility", visibility}};
+    auto res = cli.Put("/api/v1/servers/" + server_id + "/visibility", body.dump(), "application/json");
+    check(res, "set_server_visibility");
+}
+
 
 // ── members ───────────────────────────────────────────────────────────────────
 
@@ -202,18 +217,35 @@ void DenseClient::revoke_server_key(const std::string& server_id, const std::str
 
 ConnectResult DenseClient::connect(const std::string& server_id,
                                    const std::string& source_name,
-                                   const std::string& device)
+                                   const std::string& source_id)
 {
     auto cli = make_client(token_);
     json body = {
         {"server_id",   server_id},
         {"source_name", source_name},
-        {"device",      device},
     };
+    if (!source_id.empty()) body["source_id"] = source_id;
     auto res = cli.Post("/api/v1/sources/connect", body.dump(), "application/json");
     check(res, "connect");
     auto data = json::parse(res->body);
-    return {data.at("server_id").get<std::string>(), data.at("source_id").get<std::string>()};
+    return {data.at("server_id").get<std::string>(),
+            data.at("source_id").get<std::string>(),
+            data.value("already_linked", false)};
+}
+
+std::vector<SourceInfo> DenseClient::list_sources(const std::string& server_id) {
+    auto cli = make_client(token_);
+    auto res = cli.Get("/api/v1/servers/" + server_id + "/sources");
+    check(res, "list_sources");
+    std::vector<SourceInfo> out;
+    for (const auto& d : json::parse(res->body)) out.push_back(parse_source(d));
+    return out;
+}
+
+void DenseClient::unlink_source(const std::string& server_id, const std::string& source_id) {
+    auto cli = make_client(token_);
+    auto res = cli.Delete("/api/v1/servers/" + server_id + "/sources/" + source_id);
+    check(res, "unlink_source");
 }
 
 
